@@ -14,7 +14,9 @@ typedef short int adr;
 enum {
 	NO_PARAM,
 	HAS_DD,
-	HAS_SS = (1 << 1)
+	HAS_SS = (1 << 1),
+	HAS_R = (1 << 2),
+	HAS_NN = (1 << 3)
 };
 enum {
 	ARG_REG,
@@ -23,6 +25,8 @@ enum {
 char* compare(word w);
 byte mem[64 * 1024];
 word reg[8];
+byte r;
+byte nn;
 //======================================================================
 struct Command {
 	word mask;
@@ -38,14 +42,20 @@ struct SS_DD {
 } ss, dd;
 //======================================================================
 void do_mov();
+void do_movb();
 void do_add();
 void do_halt();
+void do_sob();
+void do_clr();
 void do_unknown();
 //======================================================================
 struct Command command_list[] = {
 	{0xFFFF, 0, "HALT", do_halt, NO_PARAM},
 	{0170000, 0010000, "MOV", do_mov, HAS_SS | HAS_DD},
 	{0170000, 0060000, "ADD", do_add, HAS_SS | HAS_DD},
+	{0xFF00, 0077000, "SOB", do_sob, HAS_R | HAS_NN},
+	{0177700, 0005000, "CLR", do_clr, HAS_DD},
+	{0170000, 0110000, "MOVB", do_movb, HAS_SS | HAS_DD},
 	{0, 0, "UNKNOWN", do_unknown, NO_PARAM}
 };
 //======================================================================
@@ -65,7 +75,7 @@ int main(int argc, char **argv)
 {
 	//mem_dump(0200, 16);
 	FILE *f;
-	char * filename = "add.o";
+	char * filename = "sumvar_word.txt.o";
 	if(argc != 1) {
 		filename = argv[1];
 	}
@@ -117,19 +127,28 @@ struct SS_DD get_mr(word w) {
 			printf("(R%d) ", n);
 			break;
 		case 2:						//(R1)+
-			res.arg_type = ARG_MEM;
-			if(n == 7) {
-				res.a = pc;
-				res.val = w_read(res.a);
-				printf("#%d ", mem[pc]);
-			}
-			else {
-				res.a = reg[n] + 2;
-				res.val = w_read(res.a);
+			res.a = reg[n];
+			res.val = w_read(res.a);
+			reg[n] += 2;  // TODO +1
+			if (n == 7)
+				printf("#%o ", res.val);
+			else
 				printf("(R%d)+ ", n);
-			}
+			
+			break;
+		case 3:						//@(R1)+
+			res.a = w_read(reg[n]);
+			res.val = w_read(res.a);
+			reg[n] += 2;  
+			if (n == 7)
+				printf("@#%o ", res.a);
+			else
+				printf("@(R%d)+ ", n);
+			
 			break;
 		default :
+			printf("Not implemented yet mode %d\n", mode);
+			exit(1);
 			break;
 	}
 	return res;
@@ -141,17 +160,33 @@ void do_mov() {
 	else
 		w_write(dd.a, ss.val);
 }
+void do_movb() {}
+	
 void do_add() {
-	if(dd.arg_type == ARG_REG)
+	if(dd.arg_type == ARG_REG) {
 		reg[dd.a] = dd.val + ss.val;
+		printf("   R%d = %06o", dd.a, reg[dd.a]);
+	}
 	else
 		w_write(dd.a, dd.val + ss.val);
 }
 void do_halt() {
 	printf("\nTHE END!\n");
-	for(int i = 0; i < 8; i++)
-		printf("R%d = %d\n", i, reg[i]);
+	for(int i = 0; i < 7; i++)
+		printf("R%d = %o\n", i, reg[i]);
+	printf("pc = %d\n", pc);
 	exit(0);
+}
+void do_sob() {
+	printf("R%d %06o", r, pc - 2 * nn);
+	if((--reg[r]))
+		pc -= 2 * nn;
+}
+void do_clr() {
+	if(dd.arg_type == ARG_REG)
+		reg[dd.a] = 0;
+	else
+		w_write(dd.a, 0);
 }
 void do_unknown() {}
 
@@ -189,10 +224,15 @@ void run_programm() {
 			struct Command cmd = command_list[i];
 			if((w & cmd.mask) == cmd.opcode) {
 				printf("%s ", cmd.name);
-				if((cmd.param >> 1) & 1)
+				if(cmd.param & HAS_SS)
 					ss = get_mr(w >> 6);
-				if(cmd.param & 1)
+				if(cmd.param & HAS_DD)
 					dd = get_mr(w);
+				if(cmd.param & HAS_R) 
+					r = (w >> 6) & 7;
+				if(cmd.param & HAS_NN) {
+					nn = w & 077;
+				}
 				cmd.do_action();
 				break;
 			}
