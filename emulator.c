@@ -11,6 +11,7 @@ typedef unsigned char byte;
 typedef unsigned short int word;
 typedef unsigned short int adr;
 #define pc reg[7]
+#define sp reg[6]
 enum {
 	NO_PARAM,
 	HAS_DD,
@@ -18,7 +19,7 @@ enum {
 	HAS_R = (1 << 2),
 	HAS_NN = (1 << 3),
 	HAS_XX = (1 << 4),
-	IS_BYTE_COM = (1 << 5)
+	IS_BYTE_COM = (1 << 5),
 };
 enum {
 	ARG_REG,
@@ -29,6 +30,9 @@ enum {
 	ostat = 0177564,
 	odata = 0177566
 };
+
+enum {RTS_OP_CODE = 0000200};
+
 char* compare(word w);
 byte mem[64 * 1024];
 word reg[8];
@@ -63,6 +67,8 @@ void do_beq();
 void do_br();
 void do_tstb();
 void do_bpl();
+void do_jsr();
+void do_rts();
 void do_unknown();
 //======================================================================
 struct Command command_list[] = {
@@ -76,6 +82,8 @@ struct Command command_list[] = {
 	{0xFF00, 0000400, "BR", do_br, HAS_XX},
 	{0177700, 0105700, "TSTB", do_tstb, HAS_DD | IS_BYTE_COM},
 	{0177000, 0100000, "BPL", do_bpl, HAS_XX},
+	{0177000, 0004000, "JSR", do_jsr, HAS_DD | HAS_R},
+	{0177770, 0000200, "RTS", do_rts, HAS_R},
 	{0, 0, "UNKNOWN", do_unknown, NO_PARAM}
 };
 //======================================================================
@@ -93,9 +101,8 @@ void run_programm();
 //======================================================================
 int main(int argc, char **argv)
 {
-	//mem_dump(0200, 16);
 	FILE *f;
-	char * filename = "char.pdp.o";
+	char * filename = "hello.pdp.o";
 	if(argc != 1) {
 		filename = argv[1];
 	}
@@ -105,6 +112,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 	load_file(f);
+	mem_dump(01000, 20);
 	run_programm();
 	fclose(f);
 	return 0;
@@ -185,6 +193,23 @@ struct SS_DD get_mr(word w) {
 			res.val = w_read(res.a);
 			printf("-R(%d) ", n);
 			break;
+		case 6:						//nn(R)
+			res.arg_type = ARG_MEM;
+			
+			
+			if(n != 7) {
+				res.a = reg[n] + w_read(pc);
+				res.val = w_read(res.a);
+				printf("%o(R%d) ", w_read(pc), n);
+				pc += 2;
+			}
+			else {
+				res.a = pc + 2 + w_read(pc);
+				res.val = w_read(res.a);
+				pc += 2;
+				printf("%o ", res.a);
+			}
+			break;
 		default :
 			printf("Not implemented yet mode %d\n", mode);
 			exit(1);
@@ -259,7 +284,7 @@ void do_halt() {
 	exit(0);
 }
 void do_sob() {
-	printf("R%d %06o", r, pc - 2 * nn);
+	printf("%06o", pc - 2 * nn);
 	if((--reg[r]))
 		pc -= 2 * nn;
 }
@@ -268,6 +293,8 @@ void do_clr() {
 		reg[dd.a] = 0;
 	else
 		w_write(dd.a, 0);
+	N = 0;
+	Z = 1;
 }
 void do_unknown() {}
 void do_beq() {
@@ -293,6 +320,20 @@ void do_bpl() {
 	if(N == 0)
 		do_br();
 }
+void do_jsr() {
+	sp -= 2;
+	w_write(sp, reg[r]);
+	reg[r] = pc;
+	pc = dd.a;
+	//fprintf(stderr, "sp = %o, mem[sp] = %o\n", sp, w_read(sp));
+}
+void do_rts() {
+	pc = reg[r];
+	reg[r] = w_read(sp);
+	sp += 2;
+}
+
+
 void load_file(FILE* f) {
 	unsigned x = 0;
 	unsigned a = 0;
@@ -306,6 +347,7 @@ void load_file(FILE* f) {
 		}
 	}
 }
+
 //======================================================================
 void mem_dump(adr start, word n) {
 	word i = 0;
@@ -332,12 +374,17 @@ void run_programm() {
 					IsByteCommand = 1;
 				else
 					IsByteCommand = 0;
+				if(cmd.param & HAS_R) {
+					if(cmd.opcode == RTS_OP_CODE)
+						r = w & 7;
+					else
+						r = (w >> 6) & 7;
+					printf("R%d ", r);
+				}
 				if(cmd.param & HAS_SS)
 					ss = get_mr(w >> 6);
 				if(cmd.param & HAS_DD)
 					dd = get_mr(w);
-				if(cmd.param & HAS_R) 
-					r = (w >> 6) & 7;
 				if(cmd.param & HAS_NN)
 					nn = w & 077;
 				if(cmd.param & HAS_XX) {
