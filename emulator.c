@@ -1,81 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-enum COMANDS {
-	ADD = 06,
-	MOVE = 01,
-	HALT = 00
-};
+#include "emulator.h"
 
-typedef unsigned char byte;
-typedef unsigned short int word;
-typedef unsigned short int adr;
-#define pc reg[7]
-#define sp reg[6]
-enum {
-	NO_PARAM,
-	HAS_DD,
-	HAS_SS = (1 << 1),
-	HAS_R = (1 << 2),
-	HAS_NN = (1 << 3),
-	HAS_XX = (1 << 4),
-	IS_BYTE_COM = (1 << 5),
-};
-enum {
-	ARG_REG,
-	ARG_MEM
-};
-
-enum {
-	ostat = 0177564,
-	odata = 0177566
-};
-
-enum {RTS_OP_CODE = 0000200};
-
-char* compare(word w);
-byte mem[64 * 1024];
-word reg[8];
-byte r;
-byte nn;
-word xx;
-int IsByteCommand;
-byte N;
-byte Z;
-byte C;
-//======================================================================
-struct Command {
-	word mask;
-	word opcode;
-	char* name;
-	void (*do_action)();
-	word param;
-};
-struct SS_DD {
-	word val;
-	adr a;
-	int arg_type;
-} ss, dd;
-//======================================================================
-void do_mov();
-void do_movb();
-void do_add();
-void do_halt();
-void do_sob();
-void do_clr();
-void do_beq();
-void do_br();
-void do_tstb();
-void do_bpl();
-void do_jsr();
-void do_rts();
-void do_unknown();
-//======================================================================
 struct Command command_list[] = {
 	{0xFFFF, 0, "HALT", do_halt, NO_PARAM},
 	{0170000, 0010000, "MOV", do_mov, HAS_SS | HAS_DD},
 	{0170000, 0060000, "ADD", do_add, HAS_SS | HAS_DD},
-	{0xFF00, 0077000, "SOB", do_sob, HAS_R | HAS_NN}, 
+	{0177000, 0077000, "SOB", do_sob, HAS_R | HAS_NN}, 
 	{0177700, 0005000, "CLR", do_clr, HAS_DD},
 	{0170000, 0110000, "MOVB", do_movb, HAS_SS | HAS_DD | IS_BYTE_COM},
 	{0177700, 0001400, "BEQ", do_beq, HAS_XX},
@@ -84,25 +16,19 @@ struct Command command_list[] = {
 	{0177000, 0100000, "BPL", do_bpl, HAS_XX},
 	{0177000, 0004000, "JSR", do_jsr, HAS_DD | HAS_R},
 	{0177770, 0000200, "RTS", do_rts, HAS_R},
+	{0170000, 0040000, "BIC", do_bic, HAS_SS | HAS_DD},
+	{0177700, 0006200, "ASR", do_asr, HAS_DD},
+	{0177700, 0105200, "INCB", do_incb, HAS_DD},
+	{0177700, 0005200, "INC", do_inc, HAS_DD},
+	{0177000, 0072000, "ASH", do_ash, HAS_DD | HAS_R},
+	{0177700, 0005700, "TST", do_tst, HAS_DD},
 	{0, 0, "UNKNOWN", do_unknown, NO_PARAM}
 };
-//======================================================================
-byte b_read(adr a);
-void b_write(adr a, byte val);
-word w_read(adr a);
-void w_write(adr a, word val);
-struct SS_DD get_mr(word w);
-void load_file(FILE* f);
-void mem_dump(adr start, word n);
-void run_programm();
-//======================================================================
 
-
-//======================================================================
 int main(int argc, char **argv)
 {
 	FILE *f;
-	char * filename = "hello.pdp.o";
+	char * filename = "vos.o";
 	if(argc != 1) {
 		filename = argv[1];
 	}
@@ -112,7 +38,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 	load_file(f);
-	mem_dump(01000, 20);
+	//mem_dump(01000, 20);
 	run_programm();
 	fclose(f);
 	return 0;
@@ -136,6 +62,12 @@ word w_read(adr a) {
 void w_write(adr a, word val) {
 	b_write(a + 1, (byte)(val >> 8));
 	b_write(a, (byte)val);
+}
+//======================================================================
+void reg_dump() {
+	printf("\n");
+	for(int i = 0; i < 8; i++)
+		printf("R%d = %o  ", i, reg[i]);
 }
 //======================================================================
 struct SS_DD get_mr(word w) {
@@ -191,12 +123,10 @@ struct SS_DD get_mr(word w) {
 				reg[n] -= 2;
 			res.a = reg[n];
 			res.val = w_read(res.a);
-			printf("-R(%d) ", n);
+			printf("-(R%d) ", n);
 			break;
 		case 6:						//nn(R)
 			res.arg_type = ARG_MEM;
-			
-			
 			if(n != 7) {
 				res.a = reg[n] + w_read(pc);
 				res.val = w_read(res.a);
@@ -205,8 +135,8 @@ struct SS_DD get_mr(word w) {
 			}
 			else {
 				res.a = pc + 2 + w_read(pc);
-				res.val = w_read(res.a);
 				pc += 2;
+				res.val = w_read(res.a);
 				printf("%o ", res.a);
 			}
 			break;
@@ -265,19 +195,16 @@ void do_add() {
 	}
 	else
 		w_write(dd.a, res);
-	if(res < 0) {
+
+	Z = 0;
+	N = 0;
+	if(res < 0)
 		N = 1;
-		Z = 0;
-	}
-	else if(res == 0) {
-		N = 0;
+	if(res == 0)
 		Z = 1;
-	}
-	else
-		N = Z = 0;
 }
 void do_halt() {
-	printf("\nTHE END!\n");
+	printf("\nHALTED\n");
 	for(int i = 0; i < 7; i++)
 		printf("R%d = %o\n", i, reg[i]);
 	printf("pc = %d\n", pc);
@@ -296,7 +223,9 @@ void do_clr() {
 	N = 0;
 	Z = 1;
 }
-void do_unknown() {}
+void do_unknown() {
+	exit(1);
+}
 void do_beq() {
 	printf("%06o ", pc + 2 * xx);
 	if(Z == 1)
@@ -325,15 +254,99 @@ void do_jsr() {
 	w_write(sp, reg[r]);
 	reg[r] = pc;
 	pc = dd.a;
-	//fprintf(stderr, "sp = %o, mem[sp] = %o\n", sp, w_read(sp));
 }
 void do_rts() {
 	pc = reg[r];
 	reg[r] = w_read(sp);
 	sp += 2;
 }
+void do_bic() {
+	word res = dd.val & (~ss.val);
+	if(dd.arg_type == ARG_REG)
+		reg[dd.a] = res;
+	else
+		w_write(dd.a, res);
+	
+	//fprintf(stderr, "\nss = %06o\ndd = %06o\nres = %06o\n-----------------\n", ss.val, dd.val, res);
 
+	Z = 0;
+	N = 0;
+	if(res < 0)
+		N = 1;
+	if(res == 0)
+		Z = 1;
+}
+void do_asr() {
+	word res = (dd.val >> 1);
+	//if(dd.val >> 15)
+	//	res = res & 0100000;
 
+	if(dd.arg_type == ARG_REG)
+		reg[dd.a] = res;
+	else
+		w_write(dd.a, res);
+
+	Z = 0;
+	N = 0;
+	if(res < 0)
+		N = 1;
+	if(res == 0)
+		Z = 1;
+}
+void do_incb() {
+	byte res = b_read(dd.a);
+	res++;
+	b_write(dd.a, res);
+
+	Z = 0;
+	N = 0;
+	if(res < 0)
+		N = 1;
+	if(res == 0)
+		Z = 1;
+}
+void do_inc() {
+	word res = w_read(dd.a);
+	res++;
+	w_write(dd.a, res);
+
+	Z = 0;
+	N = 0;
+	if(res < 0)
+		N = 1;
+	if(res == 0)
+		Z = 1;
+}
+void do_ash() {
+	int n = dd.val & 077;
+	if(n >= 0) {
+		reg[r] = reg[r] << n;
+		reg[r] = (reg[r] >> 1) << 1;
+	}
+	else {
+		word first_bit = reg[r] >> 15;
+		reg[r] = reg[r] >> (n * (-1));
+		if(first_bit)
+			reg[r] = reg[r] & 0100000;
+	}
+
+	word res = reg[r];
+	Z = 0;
+	N = 0;
+	if(res < 0)
+		N = 1;
+	if(res == 0)
+		Z = 1;
+}
+void do_tst() {
+	N = 0;
+	Z = 0;
+	if(dd.val < 0)
+		N = 1;
+	if(dd.val == 0)
+		Z = 1;
+}
+//======================================================================
 void load_file(FILE* f) {
 	unsigned x = 0;
 	unsigned a = 0;
@@ -347,7 +360,6 @@ void load_file(FILE* f) {
 		}
 	}
 }
-
 //======================================================================
 void mem_dump(adr start, word n) {
 	word i = 0;
@@ -393,6 +405,8 @@ void run_programm() {
 						xx = xx - 0400;
 				}
 				cmd.do_action();
+				reg_dump();
+				//reg_dump();
 				break;
 			}
 		}
